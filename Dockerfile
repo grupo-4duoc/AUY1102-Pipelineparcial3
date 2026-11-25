@@ -22,7 +22,7 @@ COPY tsconfig*.json ./
 COPY jest.config.js ./
 
 # Instalar todas las dependencias (incluyendo devDependencies para build y tests)
-RUN npm ci || npm install
+RUN npm ci --ignore-scripts
 
 # Copiar código fuente y pruebas unitarias
 COPY src/ ./src/
@@ -52,7 +52,7 @@ ENV NODE_ENV=production
 COPY package*.json ./
 
 # Instalar solo dependencias de producción para minimizar tamaño y vulnerabilidades
-RUN npm ci --omit=dev --ignore-scripts || npm install --omit=dev --ignore-scripts
+RUN npm ci --omit=dev --ignore-scripts
 
 # Copiar artefactos compilados desde la etapa builder
 COPY --from=builder /usr/src/app/dist ./dist

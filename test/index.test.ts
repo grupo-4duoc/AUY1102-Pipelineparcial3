@@ -1,4 +1,4 @@
-import { fetchData, getConfig } from '../src';
+import { API_URL, fetchData, getConfig } from '../src';
 
 describe('index', () => {
   const originalFetch = global.fetch;
@@ -40,26 +40,42 @@ describe('index', () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it('should call the API with the encoded key and return the data', async () => {
+    it('should send the key in the "x-api-key" header and not in the URL', async () => {
       const data = { ok: true };
       const fetchMock = jest.fn().mockResolvedValue({ json: () => Promise.resolve(data) });
       global.fetch = fetchMock;
-      jest.spyOn(console, 'log').mockImplementation(() => undefined);
+      const infoSpy = jest.spyOn(console, 'info').mockImplementation(() => undefined);
 
-      const result = await fetchData({ apiKey: 'a b&c' });
+      const result = await fetchData({ apiKey: 'key-test' });
 
-      expect(fetchMock).toHaveBeenCalledWith('https://api.example.com/data?api_key=a%20b%26c');
+      expect(fetchMock).toHaveBeenCalledWith(API_URL, {
+        headers: { 'x-api-key': 'key-test' },
+      });
+      expect(fetchMock.mock.calls[0][0]).not.toContain('key-test');
       expect(result).toEqual(data);
+      expect(infoSpy).toHaveBeenCalledWith('Consulta a la API completada.');
     });
 
-    it('should return undefined and log the error when the request fails', async () => {
-      global.fetch = jest.fn().mockRejectedValue(new Error('sin red'));
+    it('should not log the API response', async () => {
+      const data = { mensaje: 'no-debe-loguearse' };
+      global.fetch = jest.fn().mockResolvedValue({ json: () => Promise.resolve(data) });
+      const logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
+      const infoSpy = jest.spyOn(console, 'info').mockImplementation(() => undefined);
+
+      await fetchData({ apiKey: 'key-test' });
+
+      expect(logSpy).not.toHaveBeenCalled();
+      expect(JSON.stringify(infoSpy.mock.calls)).not.toContain('no-debe-loguearse');
+    });
+
+    it('should return undefined and log only a fixed message when the request fails', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('detalle-interno'));
       const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
 
       const result = await fetchData({ apiKey: 'key' });
 
       expect(result).toBeUndefined();
-      expect(errorSpy).toHaveBeenCalled();
+      expect(errorSpy).toHaveBeenCalledWith('Error al consultar la API.');
     });
 
     it('should use the configuration from the environment by default', async () => {
