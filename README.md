@@ -21,35 +21,41 @@
 
 El pipeline implementa una estrategia de integración y entrega continua (CI/CD) con mentalidad **DevSecOps**, asegurando que ninguna versión de software llegue a producción sin haber validado su funcionalidad, calidad y seguridad.
 
+Los **gates de calidad y seguridad se ejecutan ANTES de publicar**. El job `Publicar en Docker Hub` declara `needs` hacia todos los demás jobs: si cualquiera falla, la imagen **no se publica**. Además, la publicación solo ocurre en `push` a `develop` (o ejecución manual); en un Pull Request a `main` se ejecutan todos los gates, pero no se publica.
+
 ```mermaid
 flowchart TD
-    subgraph Triggers ["🚀 Disparadores de GitHub Actions"]
-        T1["Push a rama 'develop'"]
-        T2["Pull Request a rama 'main'"]
+    subgraph Triggers ["🚀 Disparadores (ci-docker.yml)"]
+        T1["Push a 'develop'"]
+        T2["Pull Request a 'main'"]
+        T3["workflow_dispatch (manual)"]
     end
 
-    subgraph CI_Abraham ["📦 Parte 1: Docker y CI (Abraham Ravelo)"]
-        S1["1. Checkout del Código"] --> S2["2. Setup Docker Buildx y QEMU"]
-        S2 --> S3["3. Build Imagen Docker (Target: test)"]
-        S3 --> S4["4. Ejecución de Pruebas Unitarias DENTRO del Contenedor"]
-        S4 -->|Tests Exitosos| S5["5. Login Seguro en Docker Hub (Secrets)"]
-        S4 -->|Tests Fallidos| ERR1["❌ Pipeline Interrumpido (Integridad Protegida)"]
-        S5 --> S6["6. Generación de Metadatos y Tags (latest, sha)"]
-        S6 --> S7["7. Publicación de Imagen en Docker Hub"]
+    subgraph Parte1 ["📦 Parte 1: Docker y CI (Abraham Ravelo)"]
+        BT["Build y Pruebas en Contenedor<br/>(docker build --target test + npm run test:unit)"]
     end
 
-    subgraph Security_Simon ["🛡️ Parte 2: DevSecOps y Gates (Simón Lagos)"]
-        S7 --> SEC1["Análisis Estático SonarCloud (SAST)"]
-        S7 --> SEC2["Escaneo de Dependencias Snyk (SCA)"]
-        S7 --> SEC3["GitHub Advanced Security (Secret Scanning & CodeQL)"]
-        S7 --> SEC4["Docker Scout (Escaneo de CVEs en Contenedor)"]
-        SEC1 & SEC2 & SEC3 & SEC4 --> QG{"¿Supera Quality & Security Gates?"}
-        QG -->|Sí| DEPLOY["✅ Despliegue Aprobado a Producción"]
-        QG -->|No| ERR2["❌ Despliegue Bloqueado por Seguridad"]
+    subgraph Parte2 ["🛡️ Parte 2: Gates de Calidad y Seguridad (Simón Lagos)"]
+        SONAR["SonarCloud<br/>(Quality Gate)"]
+        SNYK["Snyk<br/>(snyk test + snyk code test)"]
+        subgraph GHAS ["GHAS - security.yml (workflow reutilizable)"]
+            CODEQL["CodeQL"]
+            DR["Dependency Review<br/>(solo en PR)"]
+            GL["Gitleaks<br/>(secretos)"]
+        end
+        SCOUT["Docker Scout<br/>(imagen target production)"]
     end
 
-    T1 --> S1
-    T2 --> S1
+    T1 & T2 & T3 --> BT
+    T1 & T2 & T3 --> SONAR
+    T1 & T2 & T3 --> SNYK
+    T1 & T2 & T3 --> GHAS
+    BT --> SCOUT
+
+    BT & SONAR & SNYK & GHAS & SCOUT --> QG{"¿Todos los gates<br/>en verde?"}
+    QG -->|"No"| BLOCK["❌ No se publica<br/>PR a main bloqueado por Ruleset"]
+    QG -->|"Sí + push a develop"| PUB["🐳 Publicar en Docker Hub<br/>(needs: todos los jobs)"]
+    QG -->|"Sí + PR a main"| MERGE["✅ PR habilitado para merge"]
 ```
 
 ---
@@ -90,23 +96,57 @@ El flujo automatiza de extremo a extremo:
 
 ## 🛡️ 3. Detalle de Implementación: Parte 2 (Simón Lagos)
 
-### 3.1. SonarCloud (Análisis Estático de Código - SAST)
-- Archivo de configuración: `sonar-project.properties`.
-- Analiza calidad, duplicaciones de código, malas prácticas (*code smells*) y cobertura de pruebas sobre el directorio `src/`.
+La Parte 2 convierte el pipeline de la Parte 1 en un pipeline **DevSecOps con gates**: cada herramienta de calidad o seguridad es un job independiente que debe terminar en verde para que la imagen se publique en Docker Hub y para que un Pull Request pueda integrarse a `main`.
 
-### 3.2. Snyk (Escaneo de Dependencias y Librerías)
-- Monitorea vulnerabilidades en librerías de terceros declaradas en `package.json` y `package-lock.json`.
+### 3.1. Archivos de la Parte 2
 
-### 3.3. GitHub Advanced Security (GHAS)
-- **Secret Scanning:** Detección automática de tokens y credenciales expuestas (e.g. `credentials.yml`).
-- **CodeQL:** Análisis semántico de patrones inseguros en código TypeScript.
-- **Dependabot:** Detección de dependencias desactualizadas o con alertas de seguridad.
+| Archivo | Propósito |
+| :--- | :--- |
+| `.github/workflows/ci-docker.yml` | Pipeline principal. Se dispara con `push` a `develop`, `pull_request` a `main` y `workflow_dispatch`. Contiene los jobs de build/pruebas, SonarCloud, Snyk, GHAS, Docker Scout y la publicación con `needs` hacia todos. |
+| `.github/workflows/security.yml` | Workflow **reutilizable** (`on: workflow_call`) con los controles de GitHub Advanced Security: CodeQL, Dependency Review y escaneo de secretos con Gitleaks. Se invoca desde el job `ghas` de `ci-docker.yml`. |
+| `sonar-project.properties` | Configuración de SonarCloud: organización `sinnada`, proyecto `sinnada_AUY1102-Pipelineparcial3`, código en `src/`, pruebas en `test/` y cobertura desde `coverage/lcov.info`. |
+| `.github/dependabot.yml` | Actualizaciones automáticas de dependencias para **npm**, **docker** (imagen base del `Dockerfile`) y **github-actions**, con PRs dirigidos a `develop`. |
 
-### 3.4. Docker Scout
-- Analiza la imagen compilada capa por capa, identificando CVEs (Common Vulnerabilities and Exposures) en los paquetes de Alpine y dependencias.
+Los workflows originales de la plantilla (`codeql.yml`, `pull_request.yml` y `reusable-workflow.yml`) se conservaron como **legado**: se actualizaron (Node 22, actions v4, CodeQL v4) y quedaron solo con `workflow_dispatch`, para no duplicar análisis con el pipeline principal.
 
-### 3.5. Quality & Security Gates
-- Regla de interrupción automática: si se detectan vulnerabilidades de severidad `CRITICAL` o `HIGH`, el pipeline falla y rechaza la integración a `main`.
+### 3.2. Jobs del pipeline: qué analizan y cuándo fallan
+
+| Job (check en GitHub) | Herramienta | Qué analiza | Cuándo falla (gate) |
+| :--- | :--- | :--- | :--- |
+| `Build y Pruebas en Contenedor` | Docker + Jest | Construye la imagen `target: test` y ejecuta `npm run test:unit` dentro del contenedor (Parte 1). | Si alguna prueba unitaria falla. |
+| `SonarCloud (Quality Gate)` | SonarCloud (`SonarSource/sonarqube-scan-action`) | Calidad del código (bugs, vulnerabilidades, *code smells*, duplicación) y **cobertura** de pruebas generada con `npm run test:coverage`. | Si el Quality Gate **"Sonar way"** queda en *Failed* (por ejemplo, cobertura < 80% en código nuevo o issues de seguridad). Se usa `-Dsonar.qualitygate.wait=true` para que el job espere el veredicto. |
+| `Snyk (dependencias y código)` | Snyk (`snyk/actions/node`) | **SCA:** `snyk test` revisa las librerías de `package.json`/`package-lock.json`. **SAST:** `snyk code test` revisa el código fuente. | Si cualquiera de los dos encuentra hallazgos de severidad **high o critical** (`--severity-threshold=high`). |
+| `GHAS / CodeQL (javascript-typescript)` | CodeQL (`github/codeql-action@v4`, consultas `security-extended`) | Análisis semántico del código TypeScript (inyecciones, XSS, logging de datos sensibles, etc.). Publica las alertas en *Security → Code scanning*. | Un paso propio lee el SARIF y falla si hay hallazgos con `security-severity >= 7.0` (**high/critical**). |
+| `GHAS / Dependency Review` | `actions/dependency-review-action@v4` | Compara las dependencias que **agrega o modifica** un Pull Request contra la rama destino. Solo corre en `pull_request`. | Si el PR introduce una dependencia con vulnerabilidad **high o superior** (`fail-on-severity: high`). |
+| `GHAS / Escaneo de secretos (Gitleaks)` | Gitleaks (imagen Docker oficial) | Busca tokens, API keys y credenciales en los archivos del repositorio. Complementa el *Secret Scanning* y *Push Protection* nativos de GitHub. | Si encuentra al menos un secreto (`--exit-code 1`). |
+| `Docker Scout (imagen production)` | `docker/scout-action` | Construye la imagen `target: production` (sin publicarla) y analiza los CVEs de sus paquetes de sistema y de Node.js. | Si existen CVEs **critical o high** (`only-severities: critical,high`, `exit-code: true`). |
+| `Publicar en Docker Hub` | `docker/build-push-action` | Publica la imagen `production` con tags `latest`, `sha-xxxxxxx` y nombre de rama. | Tiene `needs` hacia **todos** los jobs anteriores: si uno falla, este job se omite. Solo se ejecuta en `push` a `develop` o manualmente. |
+
+### 3.3. Dependabot
+Además de abrir PRs de actualización, Dependabot genera **alertas** en *Security → Dependabot* cuando una dependencia del `package-lock.json` tiene una vulnerabilidad conocida. Se amplió su configuración a los ecosistemas `docker` y `github-actions` para mantener actualizada la imagen base y las versiones de las actions.
+
+### 3.4. Protección de la rama `main` (Ruleset)
+Se creó el Ruleset **`proteger-main`** (Settings → Rules → Rulesets) sobre la rama `main`, que exige Pull Request y los **7 checks** del pipeline como *required status checks*:
+
+1. `Build y Pruebas en Contenedor`
+2. `SonarCloud (Quality Gate)`
+3. `Snyk (dependencias y código)`
+4. `Docker Scout (imagen production)`
+5. `GHAS / CodeQL (javascript-typescript)`
+6. `GHAS / Escaneo de secretos (Gitleaks)`
+7. `GHAS / Dependency Review`
+
+Con esto, un Pull Request con problemas de calidad o seguridad **no se puede mergear** a `main`.
+
+### 3.5. Secrets utilizados
+| Secret | Uso |
+| :--- | :--- |
+| `SONAR_TOKEN` | Autenticación con SonarCloud. |
+| `SNYK_TOKEN` | Autenticación con Snyk. |
+| `DOCKERHUB_USERNAME` | Usuario de Docker Hub (Docker Scout y publicación). |
+| `DOCKERHUB_TOKEN` | Access token de Docker Hub (Read & Write). |
+
+Se eliminó el usuario de respaldo hardcodeado del pipeline original: la publicación usa **exclusivamente** los secrets del repositorio y falla explícitamente si no están configurados.
 
 ---
 
@@ -123,7 +163,7 @@ El flujo automatiza de extremo a extremo:
 ## 🛠️ 5. Guía de Ejecución y Pruebas Locales
 
 ### Prerrequisitos
-- Node.js >= 18.x
+- Node.js >= 22.x
 - Docker Engine / Docker Desktop
 
 ### Comandos de Construcción y Prueba
@@ -180,5 +220,73 @@ Configuración de secretos en el repositorio (`DOCKERHUB_USERNAME` y `DOCKERHUB_
 
 ---
 
-### 6.5. Evidencias de la Parte 2 (Simón Lagos)
-*(Sección reservada para las evidencias de SonarCloud, Snyk, GitHub Advanced Security y Docker Scout)*.
+## 🚨 7. Evidencia del Bloqueo (Parte 2 - Simón Lagos)
+
+Para demostrar que los gates funcionan, el repositorio contenía **a propósito** código inseguro (`src/quality/`), secretos expuestos (`credentials.yml`, `.npmrc`, `src/index.ts`), dependencias vulnerables y una imagen base sin soporte (`node:18-alpine`). Las siguientes capturas muestran cómo el pipeline **detectó y bloqueó** cada problema.
+
+### 7.1. Pipeline bloqueado (no se publica en Docker Hub)
+Ejecución del pipeline tras un `push` a `develop`. Las pruebas unitarias pasan, pero fallan SonarCloud, Snyk, CodeQL, Gitleaks y Docker Scout. Como consecuencia, el job **`Publicar en Docker Hub` queda omitido** (*skipped*) gracias a los `needs`: ninguna imagen insegura llega a Docker Hub.
+
+![01 - Pipeline bloqueado](docs/evidencias/01-pipeline-bloqueado.jpg)
+
+### 7.2. SonarCloud: Quality Gate *Failed*
+El Quality Gate **"Sonar way"** de la rama `develop` queda en **Failed**: 21 issues de seguridad (calificación C) y una cobertura de solo **39.6%**, inferior al 80% exigido para código nuevo.
+
+![02 - SonarCloud Quality Gate](docs/evidencias/02-sonarcloud-quality-gate.jpg)
+
+### 7.3. Snyk Code: 2 hallazgos HIGH
+`snyk code test` reporta **2 vulnerabilidades HIGH**: un secreto hardcodeado en `src/index.ts` (línea 3) y una *Server-Side Template Injection* en `src/quality/insecure-1-object.ts` (entrada del usuario sin sanitizar enviada a `pug.compile`).
+
+![03 - Snyk Code](docs/evidencias/03-snyk-code.jpg)
+
+### 7.4. CodeQL: alertas critical y high
+*Security → Code scanning* muestra las alertas de CodeQL en `develop`: **Code injection (Critical)** en `src/quality/insecure-1-object.ts` y **Clear-text logging of sensitive information (High)** en `src/quality/insecure-2-object.ts`. El paso de gate del SARIF hace fallar el job.
+
+![04 - CodeQL alertas](docs/evidencias/04-codeql-alertas.jpg)
+
+### 7.5. Gitleaks: 5 secretos detectados
+El escaneo de secretos encuentra **5 filtraciones** (`leaks found: 5`), entre ellas el token de GitHub en `credentials.yml` (regla `github-fine-grained-pat`) y las variables `apiKey` y `githubToken` hardcodeadas en `src/index.ts` (regla `generic-api-key`).
+
+![05 - Gitleaks secretos](docs/evidencias/05-gitleaks-secretos.jpg)
+
+### 7.6. Dependabot: alertas de dependencias vulnerables
+Dependabot reporta **63 alertas abiertas** en el `package-lock.json`, incluyendo vulnerabilidades **critical** (por ejemplo, `handlebars`) y **high** (`flatted`, `tar`, entre otras).
+
+![06 - Dependabot alertas](docs/evidencias/06-dependabot-alertas.jpg)
+
+### 7.7. Docker Scout: 7 critical / 45 high en `node:18-alpine`
+La imagen `production` construida sobre **`node:18-alpine`** (versión sin soporte) presenta **7 vulnerabilidades critical y 45 high**, por lo que Docker Scout falla con `exit-code: true`.
+
+![07 - Docker Scout](docs/evidencias/07-docker-scout.jpg)
+
+### 7.8. Pull Request `develop` → `main` con merge bloqueado
+En el Pull Request hacia `main`, los checks requeridos fallan (*"Some checks were not successful"*) y el botón **"Merge pull request" queda deshabilitado**: el código inseguro no puede integrarse a la rama principal.
+
+![08 - PR a main bloqueado](docs/evidencias/08-pr-main-bloqueado.jpg)
+
+### 7.9. Ruleset `proteger-main` con los 7 checks requeridos
+Configuración del Ruleset que protege `main`, exigiendo como *required status checks* los 7 jobs del pipeline (build/pruebas, SonarCloud, Snyk, Docker Scout, CodeQL, Gitleaks y Dependency Review).
+
+![09 - Ruleset checks](docs/evidencias/09-ruleset-checks.jpg)
+
+---
+
+## 🔧 8. Remediación
+
+Una vez demostrado el bloqueo, se corrigieron los hallazgos en la rama `fix/remediacion-y-informe`:
+
+| # | Problema detectado | Herramienta que lo detectó | Corrección aplicada |
+| :---: | :--- | :--- | :--- |
+| 1 | Token de GitHub en `credentials.yml` | Gitleaks, Secret Scanning | Se **eliminó** el archivo. El token debe además **revocarse** en GitHub, ya que permanece en el historial de commits. |
+| 2 | `_authToken` hardcodeado en `.npmrc` | Gitleaks | Se eliminó la línea del token. Si se necesita autenticación con GitHub Packages, debe usarse `${NODE_AUTH_TOKEN}` desde un secret. |
+| 3 | `apiKey` y `githubToken` hardcodeados en `src/index.ts` | Gitleaks, Snyk Code | Las credenciales ahora se leen desde variables de entorno (`process.env.API_KEY` y `process.env.GITHUB_TOKEN`) mediante `getConfig()`. La consulta solo se ejecuta al correr `node dist/index.js` y no al importar la librería. |
+| 4 | Código inseguro de demostración en `src/quality/` (code injection, SQL injection, XSS, credenciales) | CodeQL, Snyk Code, SonarCloud | Se **eliminó** la carpeta y su exclusión en `tsconfig.json` y `.eslintignore`. |
+| 5 | Imagen base `node:18-alpine` sin soporte (7 critical / 45 high) | Docker Scout, Dependabot (docker) | `Dockerfile`: `node:18-alpine` → **`node:22-alpine`** (LTS) en todas las etapas, `RUN apk upgrade --no-cache` para aplicar parches de Alpine y eliminación de `npm`/`npx` en la etapa `production` (no se usan en ejecución y arrastran CVEs). |
+| 6 | Dependencias de producción vulnerables (`chokidar@2` → `braces`, `decode-uri-component`, etc.) | Snyk, Dependabot | `chokidar` y `cosmiconfig` **no se usaban** en el código, por lo que se eliminaron. `tslib` pasó a `dependencies` porque el código compilado la requiere en tiempo de ejecución. Resultado: `npm audit --omit=dev` → **0 vulnerabilidades**. |
+| 7 | Cobertura de 39.6% (Quality Gate exige 80%) | SonarCloud | Se agregaron pruebas unitarias para `DateValueObject`, `src/index.ts` (`getConfig` y `fetchData`) y el caso inválido de `EnumValueObject`. Cobertura local: **98.21%** de líneas (37 pruebas, 12 suites). |
+
+---
+
+## ✅ 9. Evidencia del Pipeline Aprobado
+
+*(capturas en docs/evidencias/10+)*
