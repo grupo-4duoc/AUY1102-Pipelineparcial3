@@ -10,4 +10,6 @@ function fetchData() {
         .catch(error => console.error('Error:', error));
 }
 
-fetchData();
+if (process.env.NODE_ENV !== 'test') {
+    fetchData();
+}

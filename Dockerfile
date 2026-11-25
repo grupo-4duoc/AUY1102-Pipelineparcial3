@@ -43,7 +43,7 @@ ENV NODE_ENV=production
 COPY package*.json ./
 
 # Instalar solo dependencias de producción para minimizar tamaño y vulnerabilidades
-RUN npm ci --only=production || npm install --production
+RUN npm ci --omit=dev --ignore-scripts || npm install --omit=dev --ignore-scripts
 
 # Copiar artefactos compilados desde la etapa builder
 COPY --from=builder /usr/src/app/dist ./dist
