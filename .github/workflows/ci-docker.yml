@@ -1,0 +1,223 @@
+# =======================================================
+# Pipeline CI/CD completo - AUY1102 Pipeline Parcial 3
+# Parte 1 (Docker y pruebas): Abraham Ravelo
+# Parte 2 (Calidad y seguridad + gates): Simon
+#
+# Flujo:
+#   build-test ──> docker-scout ─┐
+#   sonarcloud ──────────────────┤
+#   snyk ────────────────────────┼──> publish (Docker Hub)
+#   ghas (security.yml) ─────────┘
+# Si cualquier job falla, "publish" NO se ejecuta.
+# =======================================================
+name: CI/CD Pipeline - Docker, Calidad y Seguridad
+
+on:
+  push:
+    branches:
+      - develop
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # -----------------------------------------------------
+  # Parte 1: construir imagen de pruebas y ejecutar tests
+  # -----------------------------------------------------
+  build-test:
+    name: Build y Pruebas en Contenedor
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1. Checkout del repositorio
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: 2. Configurar QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+
+      - name: 3. Configurar Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: 4. Construir imagen Docker para pruebas unitarias
+        run: |
+          echo "Construyendo imagen Docker con target 'test'..."
+          docker build --target test -t auy1102-pipeline:test .
+
+      - name: 5. Ejecutar pruebas unitarias DENTRO del contenedor Docker
+        run: |
+          echo "Ejecutando pruebas unitarias dentro del contenedor..."
+          docker run --rm auy1102-pipeline:test npm run test:unit
+          echo "Pruebas unitarias completadas exitosamente dentro del contenedor."
+
+  # -----------------------------------------------------
+  # SonarCloud: calidad de código + Quality Gate
+  # -----------------------------------------------------
+  sonarcloud:
+    name: SonarCloud (Quality Gate)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repositorio (historial completo para Sonar)
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci --ignore-scripts
+
+      - name: Generar cobertura (coverage/lcov.info)
+        run: npm run test:coverage || true
+
+      - name: Análisis SonarCloud y espera del Quality Gate
+        uses: SonarSource/sonarqube-scan-action@fd88b7d7ccbaefd23d8f36f73b59db7a3d246602 # v6.0.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io
+        with:
+          args: >
+            -Dsonar.qualitygate.wait=true
+            -Dsonar.qualitygate.timeout=300
+
+  # -----------------------------------------------------
+  # Snyk: vulnerabilidades en dependencias (SCA) y código (SAST)
+  # -----------------------------------------------------
+  snyk:
+    name: Snyk (dependencias y código)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Snyk - escaneo de dependencias (snyk test)
+        uses: snyk/actions/node@9adf32b1121593767fc3c057af55b55db032dc04 # v1.0.0
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          command: test
+          args: --severity-threshold=high
+
+      # Se ejecuta aunque el paso anterior falle, para ver ambos reportes.
+      - name: Snyk - escaneo de código (snyk code test)
+        if: ${{ !cancelled() }}
+        uses: snyk/actions/node@9adf32b1121593767fc3c057af55b55db032dc04 # v1.0.0
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          command: code test
+          args: --severity-threshold=high
+
+  # -----------------------------------------------------
+  # GitHub Advanced Security (workflow reutilizable)
+  # CodeQL + Dependency Review + Escaneo de secretos
+  # -----------------------------------------------------
+  ghas:
+    name: GHAS
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    uses: ./.github/workflows/security.yml
+
+  # -----------------------------------------------------
+  # Docker Scout: CVEs de la imagen de producción
+  # -----------------------------------------------------
+  docker-scout:
+    name: Docker Scout (imagen production)
+    needs: build-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Configurar Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      # Docker Scout exige una cuenta de Docker Hub autenticada
+      - name: Iniciar sesión en Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Construir imagen target production (local, sin publicar)
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          target: production
+          load: true
+          push: false
+          tags: auy1102-pipeline:scan
+
+      # only-fixed: bloquea solo CVEs critical/high que YA tienen versión corregida.
+      # Los CVEs sin parche disponible (p. ej. musl de Alpine) no son accionables.
+      - name: Escanear CVEs critical/high
+        uses: docker/scout-action@4bbf17a9da65a7b5497361bb407e88cc9548f69c # v1.28.0
+        with:
+          command: cves
+          image: local://auy1102-pipeline:scan
+          only-severities: critical,high
+          only-fixed: true
+          exit-code: true
+          write-comment: false
+
+  # -----------------------------------------------------
+  # Publicación en Docker Hub: SOLO si todos los gates pasan
+  # y SOLO en push a develop o ejecución manual (no en PR)
+  # -----------------------------------------------------
+  publish:
+    name: Publicar en Docker Hub
+    needs: [build-test, sonarcloud, snyk, ghas, docker-scout]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar que existan los secrets de Docker Hub
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
+            echo "::error::Faltan los secrets DOCKERHUB_USERNAME y/o DOCKERHUB_TOKEN."
+            exit 1
+          fi
+
+      - name: Checkout del repositorio
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Configurar QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+
+      - name: Configurar Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+
+      - name: Iniciar sesión en Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Configurar tags y metadatos de Docker
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/auy1102-pipeline
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+            type=ref,event=branch
+
+      - name: Construir imagen production y publicar en Docker Hub
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          target: production
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

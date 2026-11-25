@@ -8,5 +8,11 @@ describe('EnumValueObject', () => {
 
       expect(expected).toBeInstanceOf(Seasons)
     })
+
+    it(`should throw an error if the value does not exist on SEASONS`, () => {
+      expect(() => new Seasons('MONSOON' as SEASONS)).toThrow(
+        'the value: MONSOON, no exists on seasons'
+      )
+    })
   })
 }) 
