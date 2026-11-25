@@ -1,185 +1,159 @@
-# Github NPM Registry
+# Evaluación Parcial N° 3: Aseguramiento de la Calidad del Software con GitHub y GitHub Actions
 
-## About this article
+**Asignatura:** AUY1102 - Ciclo de vida del Software I  
+**Institución:** Duoc UC - Escuela de Informática y Telecomunicaciones  
+**Ponderación:** 40% (100 puntos)  
+**Organización de GitHub:** [grupo-4duoc](https://github.com/grupo-4duoc)  
+**Repositorio de Entrega:** [grupo-4duoc/AUY1102-Pipelineparcial3](https://github.com/grupo-4duoc/AUY1102-Pipelineparcial3) (Público)
 
-GitHub with GitHubActions and GHAS offer an incredible experience for developers around the planet. Just with a few considerations and good ideas we can build a wonderful experience for our development teams, and they just literally "work only on their code"
+---
 
-## Using Github NPM Registry - Local Environment
+## 👥 Equipo de Trabajo y Distribución de Responsabilidades
 
-### Authenticating to the NPM Registry
+| Estudiante | Rol / Parte Asignada | Responsabilidades Principales |
+| :--- | :--- | :--- |
+| **Abraham Ravelo** | **Parte 1:** Automatización con GitHub Actions y Docker | • Creación y optimización de `Dockerfile` multi-stage.<br>• Pipeline de CI/CD para build de imágenes Docker.<br>• Ejecución de pruebas unitarias **dentro** del contenedor.<br>• Publicación automática a Docker Hub con credenciales seguras.<br>• Configuración de eventos y ramas (`develop` y `main`). |
+| **Simón Lagos** | **Parte 2:** Análisis de Código y Seguridad (DevSecOps) | • Integración de SonarCloud para análisis estático (SAST).<br>• Integración de Snyk para vulnerabilidades en dependencias.<br>• Configuración de GitHub Advanced Security (GHAS / Secret Scanning / CodeQL).<br>• Escaneo de imágenes con Docker Scout.<br>• Configuración de Quality & Security Gates. |
 
-1. Setting your [access token](https://docs.github.com/en/packages/learn-github-packages/about-permissions-for-github-packages#about-scopes-and-permissions-for-package-registries), to enable GitHub functions like an OAuth access token and authenticates the access to the GitHub API.
+---
 
-    Select the ```read:packages``` scope to download container images and read their metadata.
+## 📐 1. Arquitectura del Pipeline de CI/CD
 
-    Select the ```write:packages``` scope to download and upload container images and read and write their metadata.
+El pipeline implementa una estrategia de integración y entrega continua (CI/CD) con mentalidad **DevSecOps**, asegurando que ninguna versión de software llegue a producción sin haber validado su funcionalidad, calidad y seguridad.
 
-    Select the ```delete:packages``` scope to delete container images.
+```mermaid
+flowchart TD
+    subgraph Triggers ["🚀 Disparadores de GitHub Actions"]
+        T1["Push a rama 'develop'"]
+        T2["Pull Request a rama 'main'"]
+    end
 
-2. To authenticate by adding your personal access token to your ~/.npmrc file, edit the ~/.npmrc file for your project to include the following line, replacing TOKEN with your personal access token. Create a new ~/.npmrc file if one doesn't exist.
+    subgraph CI_Abraham ["📦 Parte 1: Docker y CI (Abraham Ravelo)"]
+        S1["1. Checkout del Código"] --> S2["2. Setup Docker Buildx y QEMU"]
+        S2 --> S3["3. Build Imagen Docker (Target: test)"]
+        S3 --> S4["4. Ejecución de Pruebas Unitarias DENTRO del Contenedor"]
+        S4 -->|Tests Exitosos| S5["5. Login Seguro en Docker Hub (Secrets)"]
+        S4 -->|Tests Fallidos| ERR1["❌ Pipeline Interrumpido (Integridad Protegida)"]
+        S5 --> S6["6. Generación de Metadatos y Tags (latest, sha)"]
+        S6 --> S7["7. Publicación de Imagen en Docker Hub"]
+    end
 
-    ```
-    //npm.pkg.github.com/:_authToken=TOKEN
-    ```
-3. To authenticate by logging in to npm, use the ```npm login``` command, replacing USERNAME with your GitHub username, TOKEN with your personal access token, and PUBLIC-EMAIL-ADDRESS with your email address.
+    subgraph Security_Simon ["🛡️ Parte 2: DevSecOps y Gates (Simón Lagos)"]
+        S7 --> SEC1["Análisis Estático SonarCloud (SAST)"]
+        S7 --> SEC2["Escaneo de Dependencias Snyk (SCA)"]
+        S7 --> SEC3["GitHub Advanced Security (Secret Scanning & CodeQL)"]
+        S7 --> SEC4["Docker Scout (Escaneo de CVEs en Contenedor)"]
+        SEC1 & SEC2 & SEC3 & SEC4 --> QG{"¿Supera Quality & Security Gates?"}
+        QG -->|Sí| DEPLOY["✅ Despliegue Aprobado a Producción"]
+        QG -->|No| ERR2["❌ Despliegue Bloqueado por Seguridad"]
+    end
 
-If GitHub Packages is not your default package registry for using npm and you want to use the ```npm audit``` command, we recommend you use the ```--scope``` flag with the owner of the package when you authenticate to GitHub Packages.
-
-```
-  $ npm login --scope=@OWNER --registry=https://npm.pkg.github.com
-  > Username: USERNAME
-  > Password: TOKEN
-  > Email: PUBLIC-EMAIL-ADDRESS
-```
-
-### Pushing packages
-
-#### Publishing a package using a local .npmrc file
-
-You can use an .npmrc file to configure the scope mapping for your project. In the .npmrc file, use the GitHub Packages URL and account owner so GitHub Packages knows where to route package requests. Using an .npmrc file prevents other developers from accidentally publishing the package to npmjs.org instead of GitHub Packages.
-
-1. Authenticate to GitHub Packages. For more information, see "[Authenticating to GitHub Packages](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-npm-registry#authenticating-to-github-packages)."
-2. In the same directory as your ```package.json``` file, create or edit an ```.npmrc``` file to include a line specifying GitHub Packages URL and the account owner. Replace ```OWNER``` with the name of the user or organization account that owns the repository containing your project.
-
-    ```
-    @OWNER:registry=https://npm.pkg.github.com
-    ```
-
-3. Add the .npmrc file to the repository where GitHub Packages can find your project. For more information, see "[Adding a file to a repository](https://docs.github.com/en/repositories/working-with-files/managing-files/adding-a-file-to-a-repository)."
-
-    **NOTE**: Include on [```.gitignore```](https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files) the exclusion of .npmrc to not compromise security.
-
-4. Verify the name of your package in your project's package.json. The name field must contain the scope and the ```name``` of the package. For example, if your package is called "test", and you are publishing to the "My-org" GitHub organization, the ```name``` field in your package.json should be ```@my-org/test```.
-
-5. Verify the repository field in your project's package.json. The ```repository``` field must match the URL for your GitHub ```repository```. For example, if your repository URL is ```github.com/my-org/test``` then the repository field should be ```https://github.com/my-org/test.git```.
-
-6. Publish the package:
-
-    ```
-    $ npm publish
-    ```
-
-#### Publishing a package using publishConfig in the package.json file
-
-You can use ```publishConfig``` element in the package.json file to specify the registry where you want the package published. For more information, see "[publishConfig](https://docs.npmjs.com/files/package.json#publishconfig)" in the npm documentation.
-
-1. Edit the package.json file for your package and include a ```publishConfig``` entry.
-
-```
-"publishConfig": {
-  "registry":"https://npm.pkg.github.com"
-},
+    T1 --> S1
+    T2 --> S1
 ```
 
-2. Verify the ```repository``` field in your project's package.json. The ```repository``` field must match the URL for your GitHub repository. For example, if your repository URL is ```github.com/my-org/test``` then the repository field should be ```https://github.com/my-org/test.git```
+---
 
-3. Publish the package:
+## 🐳 2. Detalle de Implementación: Parte 1 (Abraham Ravelo)
 
-      ```
-      $ npm publish
-      ```
-To discover every way to working with [NPM Registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-npm-registry) please generete and **ISSUE**.
+### 2.1. Dockerfile Multi-Etapa (`Dockerfile`)
+Se diseñó un `Dockerfile` optimizado siguiendo las mejores prácticas de la industria y consideraciones éticas de seguridad:
 
-<br>
+1. **Etapa 1 (`builder`):** Basada en `node:18-alpine` para minimizar el tamaño de la imagen y reducir la superficie de ataque frente a vulnerabilidades. Instala todas las dependencias necesarias (`npm ci` o `npm install`) y compila el proyecto TypeScript generando los artefactos en `dist/`.
+2. **Etapa 2 (`test`):** Diseñada específicamente para la ejecución de pruebas unitarias dentro del entorno aislado del contenedor (`npm run test:unit`).
+3. **Etapa 3 (`production`):** Contiene únicamente las dependencias de producción (`npm ci --only=production`) y los archivos compilados en `dist/`. Además, incorpora la instrucción **`USER node`** para evitar la ejecución del contenedor como usuario `root` (principio ético de mínimo privilegio).
 
-## Using Github Container Registry - Github Action
-<br>
+### 2.2. Archivo `.dockerignore`
+Se configuró para excluir archivos sensibles y temporales:
+- `node_modules` (evita conflictos de arquitectura).
+- `credentials.yml` (garantiza que secretos nunca queden embebidos en las capas de Docker).
+- `.git`, `.github`, `coverage` y documentación.
 
+### 2.3. Pipeline en GitHub Actions (`.github/workflows/ci-docker.yml`)
+El flujo automatiza de extremo a extremo:
+- **Disparadores específicos:**
+  - `push` a la rama `develop`.
+  - `pull_request` a la rama `main`.
+  - `workflow_dispatch` (ejecución manual).
+- **Ejecución de pruebas dentro del contenedor:**
+  ```bash
+  docker build --target test -t auy1102-pipeline:test .
+  docker run --rm auy1102-pipeline:test npm run test:unit
+  ```
+  Si alguna prueba falla, el contenedor retorna un código de salida distinto de 0 y GitHub Actions interrumpe el flujo, impidiendo que código defectuoso se publique.
+- **Publicación a Docker Hub:**
+  - Se utiliza `docker/login-action@v3` autenticando mediante variables de entorno seguras (`DOCKERHUB_USERNAME` y `DOCKERHUB_TOKEN`).
+  - La imagen se etiqueta dinámicamente con `latest`, el hash corto del commit (`sha`) y la rama correspondiente.
+  - La imagen queda disponible en: `https://hub.docker.com/r/araveloo/auy1102-pipeline`.
+
+---
+
+## 🛡️ 3. Detalle de Implementación: Parte 2 (Simón Lagos)
+
+### 3.1. SonarCloud (Análisis Estático de Código - SAST)
+- Archivo de configuración: `sonar-project.properties`.
+- Analiza calidad, duplicaciones de código, malas prácticas (*code smells*) y cobertura de pruebas sobre el directorio `src/`.
+
+### 3.2. Snyk (Escaneo de Dependencias y Librerías)
+- Monitorea vulnerabilidades en librerías de terceros declaradas en `package.json` y `package-lock.json`.
+
+### 3.3. GitHub Advanced Security (GHAS)
+- **Secret Scanning:** Detección automática de tokens y credenciales expuestas (e.g. `credentials.yml`).
+- **CodeQL:** Análisis semántico de patrones inseguros en código TypeScript.
+- **Dependabot:** Detección de dependencias desactualizadas o con alertas de seguridad.
+
+### 3.4. Docker Scout
+- Analiza la imagen compilada capa por capa, identificando CVEs (Common Vulnerabilities and Exposures) en los paquetes de Alpine y dependencias.
+
+### 3.5. Quality & Security Gates
+- Regla de interrupción automática: si se detectan vulnerabilidades de severidad `CRITICAL` o `HIGH`, el pipeline falla y rechaza la integración a `main`.
+
+---
+
+## 📋 4. Matriz de Cumplimiento de la Rúbrica de Evaluación
+
+| Indicador de Evaluación | Ponderación | Aspecto Evaluado | Cómo se cumple en el Proyecto |
+| :--- | :---: | :--- | :--- |
+| **IE4.1.1** | **33%** | Reconoce componentes de CI/CD, manteniendo integridad del código y respetando consideraciones éticas. | • Uso de `USER node` en Dockerfile (principio de menor privilegio).<br>• Secretos protegidos en GitHub Secrets (sin hardcoding de credenciales).<br>• Archivo `.dockerignore` previniendo fuga de información.<br>• Integridad garantizada mediante pruebas unitarias previas al push. |
+| **IE4.2.1** | **33%** | Diseña pipelines de CI/CD, garantizando calidad y entrega continua para compilación, prueba y despliegue ágil. | • Definición clara de triggers para `develop` (desarrollo ágil) y `main` (despliegue productivo).<br>• Flujo multi-etapa con targets independientes de test y producción.<br>• Versionamiento automático por tags y commit SHA. |
+| **IE4.3.1** | **34%** | Implementa pipelines de CI/CD para automatizar compilación, prueba y despliegue de software en desarrollo ágil. | • Workflow `.github/workflows/ci-docker.yml` completamente operativo.<br>• Ejecución real de tests unitarios dentro del contenedor Docker.<br>• Publicación automática y funcional en Docker Hub (`araveloo/auy1102-pipeline`). |
+
+---
+
+## 🛠️ 5. Guía de Ejecución y Pruebas Locales
+
+### Prerrequisitos
+- Node.js >= 18.x
+- Docker Engine / Docker Desktop
+
+### Comandos de Construcción y Prueba
+```bash
+# 1. Clonar el repositorio
+git clone https://github.com/grupo-4duoc/AUY1102-Pipelineparcial3.git
+cd AUY1102-Pipelineparcial3
+
+# 2. Construir la imagen Docker para pruebas
+docker build --target test -t auy1102-pipeline:test .
+
+# 3. Ejecutar las pruebas unitarias DENTRO del contenedor
+docker run --rm auy1102-pipeline:test npm run test:unit
+
+# 4. Construir la imagen final de producción
+docker build --target production -t auy1102-pipeline:prod .
+
+# 5. Ejecutar la aplicación en contenedor
+docker run -d -p 3000:3000 --name auy1102-app auy1102-pipeline:prod
 ```
-name: Create and publish NPM Package
-on:
-  release:
-    types: [published]
 
-jobs:
-  Publish-NPM-Package:
-    runs-on: ubuntu-latest
-    permissions:
-      packages: write
-      contents: read
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
-        with:
-          node-version: 18
-          cache-dependency-path: package-lock.json
-          registry-url: https://npm.pkg.github.com
-      - run: npm install
-      - run: npm ci
-      - run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{secrets.PAT_GITHUB_TOKEN}}
-```
-```
-name: NPM Audit
-on:
-  pull_request: 
-    branches: [develop, staging, master]
-    types: [opened, synchronize]
+---
 
-jobs:
-  npm-audit:
-    name: npm audit
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: install dependencies
-        run: npm ci
-      - uses: oke-py/npm-audit-action@v2
-        with:
-          audit_level: moderate
-          github_token: ${{ secrets.PAT_GITHUB_TOKEN }}
-          issue_assignees: oke-py
-          issue_labels: vulnerability,test
-          dedupe_issues: true
-```
+## 📸 6. Registro de Evidencias de Ejecución
 
-To enable more capabilities and demostrate the strongest of Github and Github Actions we complement this example with [Github Reusable Workflows](https://docs.github.com/en/actions/using-workflows/reusing-workflows) using Open Source Tools and Enterprise Tools on Actions.
+### Evidencia 1: Construcción y Pruebas en Contenedor (GitHub Actions)
+*(Aquí se incluye la captura de pantalla de la ejecución exitosa del job `ci-cd-docker` en GitHub Actions mostrando la salida verde de las pruebas unitarias)*.
 
-Reusing workflows avoids duplication. This makes workflows easier to maintain and allows you to create new workflows more quickly by building on the work of others, just as you do with actions. Workflow reuse also promotes best practice by helping you to use workflows that are well designed, have already been tested, and have been proved to be effective. Your organization can build up a library of reusable workflows that can be centrally maintained.
+### Evidencia 2: Publicación en Docker Hub
+*(Aquí se incluye la captura de pantalla del repositorio público `araveloo/auy1102-pipeline` en Docker Hub con la etiqueta `latest` y el SHA correspondiente)*.
 
-**Note:** To enable your actions, in some cases you must configurate [encrypted secrets](https://docs.github.com/en/enterprise-cloud@latest/actions/security-guides/encrypted-secrets)
-
-<br>
-
-```
-name: Github Reusable Workflow
-on:
-  pull_request: 
-    branches: [develop, staging, master]
-    types: [opened, synchronize]
-  release:
-    types: [published]
-
-jobs:
-  NPM-Audit:
-    if: github.event_name != 'opened'
-    uses: ./.github/workflows/npm-audit.yml
-    secrets:
-      PAT_GITHUB_TOKEN: ${{ secrets.PAT_GITHUB_TOKEN }}
-  
-  NPM-Publish:
-    if: ${{ (github.event.release.action == 'released') && always() }}
-    uses: ./.github/workflows/npm-registry.yml
-    needs: [NPM-Audit]
-    secrets:
-      PAT_GITHUB_TOKEN: ${{ secrets.PAT_GITHUB_TOKEN }}
-```
-<br>
-
-## License
-
-The scripts and documentation in this project are released under the [MIT License](./LICENSE)
-## Contributions
-
-Contributions are welcome! read our [Contributor's Guide](./docs/CONTRIBUTING.md)
-
-## Code of Conduct
-
-👋 Be nice. See our [code of conduct](./docs/code_of_conduct.md)
-
-## References
-
-+ **NPM Publish:** https://github.com/actions/setup-node
-+ **NPM Audit Signatures:** https://github.blog/changelog/2022-07-26-a-new-npm-audit-signatures-command-to-verify-npm-package-integrity/
-+ **NPM Audit:** https://github.com/marketplace/actions/npm-audit-action
+### Evidencia 3: Análisis de Seguridad y Quality Gates
+*(Aquí se incluyen las evidencias de la Parte 2: SonarCloud, Snyk, GitHub Advanced Security y Docker Scout)*.

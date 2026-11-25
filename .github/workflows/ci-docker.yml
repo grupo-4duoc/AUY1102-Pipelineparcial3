@@ -1,0 +1,82 @@
+name: CI/CD Pipeline - Docker y Pruebas Unitarias (Parte 1 - Abraham Ravelo)
+
+on:
+  push:
+    branches:
+      - develop
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  ci-cd-docker:
+    name: Build, Pruebas en Contenedor y Publicación Docker Hub
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 1. Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: 2. Configurar QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: 3. Configurar Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 4. Construir imagen Docker para pruebas unitarias
+        run: |
+          echo "=========================================================="
+          echo "Construyendo imagen Docker con target 'test'..."
+          echo "=========================================================="
+          docker build --target test -t auy1102-pipeline:test .
+
+      - name: 5. Ejecutar pruebas unitarias DENTRO del contenedor Docker
+        run: |
+          echo "=========================================================="
+          echo "Ejecutando pruebas unitarias dentro del contenedor..."
+          echo "=========================================================="
+          docker run --rm auy1102-pipeline:test npm run test:unit
+          echo "Pruebas unitarias completadas exitosamente dentro del contenedor."
+
+      - name: 6. Iniciar sesión en Docker Hub
+        if: ${{ success() && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME || 'araveloo' }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 7. Configurar tags y metadatos de Docker
+        if: ${{ success() && env.DOCKERHUB_TOKEN != '' }}
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME || 'araveloo' }}/auy1102-pipeline
+          tags: |
+            type=raw,value=latest
+            type=sha,format=short
+            type=ref,event=branch
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: 8. Construir imagen final y publicar en Docker Hub
+        if: ${{ success() && env.DOCKERHUB_TOKEN != '' }}
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          target: production
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Aviso si no están configurados los secretos de Docker Hub
+        if: ${{ success() && env.DOCKERHUB_TOKEN == '' }}
+        run: |
+          echo "::warning::El secreto DOCKERHUB_TOKEN no está configurado en GitHub Secrets."
+          echo "Para publicar la imagen automáticamente en Docker Hub, configure DOCKERHUB_USERNAME y DOCKERHUB_TOKEN en los Secrets del repositorio."
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
