@@ -1,0 +1,104 @@
+# =======================================================
+# GitHub Advanced Security - Workflow reutilizable
+# Parte 2 (Calidad y Seguridad) - Simon
+# Se llama desde ci-docker.yml (job "ghas"). No se dispara solo.
+# =======================================================
+name: GitHub Advanced Security (reutilizable)
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  # -----------------------------------------------------
+  # 1. CodeQL: análisis estático (SAST) del código TS/JS
+  # -----------------------------------------------------
+  codeql:
+    name: CodeQL (javascript-typescript)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      security-events: write # para subir alertas a la pestaña Security
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Inicializar CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: javascript-typescript
+          build-mode: none
+          queries: security-extended
+
+      - name: Ejecutar análisis CodeQL
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: '/language:javascript-typescript'
+          output: sarif-results
+          upload: always
+
+      # CodeQL por sí solo NO falla aunque encuentre vulnerabilidades.
+      # Este paso lee el SARIF y falla si hay hallazgos high/critical
+      # (security-severity >= 7.0), para que funcione como gate.
+      - name: Gate - fallar si hay hallazgos high/critical
+        shell: bash
+        run: |
+          total=0
+          for f in sarif-results/*.sarif; do
+            hallazgos=$(jq -r '
+              .runs[]
+              | ( [ (.tool.driver.rules // []), ((.tool.extensions // [])[] | (.rules // [])) ]
+                  | add
+                  | map({key: .id, value: ((.properties["security-severity"] // "0") | tonumber)})
+                  | from_entries ) as $sev
+              | .results[]
+              | select(($sev[.ruleId] // 0) >= 7.0)
+              | "\(.ruleId) [severidad \($sev[.ruleId])] \(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine)"
+            ' "$f")
+            if [ -n "$hallazgos" ]; then
+              echo "$hallazgos"
+              total=$((total + $(echo "$hallazgos" | wc -l)))
+            fi
+          done
+          if [ "$total" -gt 0 ]; then
+            echo "::error::CodeQL encontró $total hallazgo(s) high/critical. Revisa la pestaña Security > Code scanning."
+            exit 1
+          fi
+          echo "CodeQL: sin hallazgos high/critical."
+
+  # -----------------------------------------------------
+  # 2. Dependency Review: revisa dependencias NUEVAS de un PR
+  #    (solo tiene sentido en pull_request)
+  # -----------------------------------------------------
+  dependency-review:
+    name: Dependency Review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Revisar dependencias del PR
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
+  # -----------------------------------------------------
+  # 3. Escaneo de secretos con Gitleaks (imagen Docker oficial,
+  #    gratis, sin licencia). Escanea los archivos actuales.
+  # -----------------------------------------------------
+  secret-scan:
+    name: Escaneo de secretos (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Ejecutar Gitleaks
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/repo" \
+            zricethezav/gitleaks:v8.24.0 \
+            dir /repo --redact --verbose --exit-code 1

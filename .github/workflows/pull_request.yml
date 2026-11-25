@@ -1,38 +1,45 @@
-name: Typescript for Pull Requests
+# =======================================================
+# LEGADO - Workflow original de la profesora.
+# Las pruebas ahora corren en ci-docker.yml (job build-test).
+# Se deja solo con ejecución manual para no duplicar checks.
+# Actualizado: node 14 -> 22, checkout/setup-node v2 -> v4.
+# =======================================================
+name: Typescript for Pull Requests (legado)
 
 on:
-  pull_request:
-    branches:
-      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v2
+        uses: actions/setup-node@v4
         with:
-          node-version: '14'
+          node-version: '22'
 
       - name: Install dependencies
         run: npm install
 
       - name: Lint TypeScript
         run: npm run lint
-  
+
   test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v2
+        uses: actions/setup-node@v4
         with:
-          node-version: '14'
+          node-version: '22'
 
       - name: Install dependencies
         run: npm install
