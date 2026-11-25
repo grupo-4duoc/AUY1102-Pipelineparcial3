@@ -42,7 +42,8 @@ CMD ["npm", "run", "test:unit"]
 FROM node:22-alpine AS production
 
 # Actualizar paquetes del sistema Alpine para aplicar parches de seguridad
-RUN apk upgrade --no-cache
+RUN apk upgrade --no-cache && \
+    apk add --no-cache --upgrade musl musl-utils --repository=https://dl-cdn.alpinelinux.org/alpine/edge/main
 
 WORKDIR /usr/src/app
 ENV CI=true
