@@ -8,6 +8,7 @@
 FROM node:18-alpine AS builder
 
 WORKDIR /usr/src/app
+ENV CI=true
 
 # Copiar archivos de dependencias y configuración
 COPY package*.json ./
@@ -28,12 +29,14 @@ RUN npm run build
 FROM builder AS test
 ENV CI=true
 WORKDIR /usr/src/app
+ENV CI=true
 CMD ["npm", "run", "test:unit"]
 
 # Etapa 3: Imagen final optimizada para producción (Publicación en Docker Hub)
 FROM node:18-alpine AS production
 
 WORKDIR /usr/src/app
+ENV CI=true
 ENV NODE_ENV=production
 
 # Copiar manifiesto de dependencias
