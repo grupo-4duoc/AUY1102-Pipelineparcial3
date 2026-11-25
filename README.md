@@ -147,13 +147,38 @@ docker run -d -p 3000:3000 --name auy1102-app auy1102-pipeline:prod
 
 ---
 
-## 📸 6. Registro de Evidencias de Ejecución
+## 📸 6. Registro de Evidencias de Ejecución (Parte 1 - Abraham Ravelo)
 
-### Evidencia 1: Construcción y Pruebas en Contenedor (GitHub Actions)
-*(Aquí se incluye la captura de pantalla de la ejecución exitosa del job `ci-cd-docker` en GitHub Actions mostrando la salida verde de las pruebas unitarias)*.
+### 6.1. Evidencia 1: Construcción y Pruebas Unitarias DENTRO del Contenedor en GitHub Actions
+Ejecución exitosa del workflow `CI/CD Pipeline - Docker y Pruebas Unitarias (Parte 1 - Abraham Ravelo)` (Run #4). Se evidencia la compilación de TypeScript y la ejecución de las **10 suites de prueba y 18 pruebas unitarias** pasando al 100% dentro del contenedor Docker aislado:
 
-### Evidencia 2: Publicación en Docker Hub
-*(Aquí se incluye la captura de pantalla del repositorio público `araveloo/auy1102-pipeline` en Docker Hub con la etiqueta `latest` y el SHA correspondiente)*.
+![Evidencia 1 - GitHub Actions Job](img/evidencia-1-actions-job.png)
 
-### Evidencia 3: Análisis de Seguridad y Quality Gates
-*(Aquí se incluyen las evidencias de la Parte 2: SonarCloud, Snyk, GitHub Advanced Security y Docker Scout)*.
+---
+
+### 6.2. Evidencia 2: Publicación Automática en Docker Hub
+Visualización del repositorio público [`araveloo/auy1102-pipeline`](https://hub.docker.com/r/araveloo/auy1102-pipeline) en Docker Hub, con las imágenes publicadas bajo la arquitectura `linux/amd64` (45.34 MB) y las etiquetas automáticas generadas por el pipeline:
+- `latest`
+- `develop`
+- `sha-004d93c`
+
+![Evidencia 2 - Docker Hub Tags](img/evidencia-2-dockerhub-tags.png)
+
+---
+
+### 6.3. Evidencia 3: Pull Request a `main` con Verificación de Checks (All Checks Passed)
+Vista del [Pull Request #1 (`develop` → `main`)](https://github.com/grupo-4duoc/AUY1102-Pipelineparcial3/pull/1). Se comprueba el cumplimiento del requisito de activación en Pull Requests a la rama `main`, mostrando **"All checks have passed" (2/2 checks exitosos)**:
+
+![Evidencia 3 - Pull Request Checks](img/evidencia-3-pr-checks.png)
+
+---
+
+### 6.4. Evidencia 4: Gestión Ética y Segura de Credenciales (GitHub Secrets)
+Configuración de secretos en el repositorio (`DOCKERHUB_USERNAME` y `DOCKERHUB_TOKEN`), garantizando el resguardo de accesos y la ausencia de contraseñas en texto plano dentro del código fuente (principio ético de seguridad):
+
+![Evidencia 4 - GitHub Secrets](img/evidencia-4-github-secrets.png)
+
+---
+
+### 6.5. Evidencias de la Parte 2 (Simón Lagos)
+*(Sección reservada para las evidencias de SonarCloud, Snyk, GitHub Advanced Security y Docker Scout)*.
