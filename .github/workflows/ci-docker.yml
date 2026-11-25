@@ -166,6 +166,7 @@ jobs:
           only-severities: critical,high
           only-fixed: true
           exit-code: true
+          write-comment: false
 
   # -----------------------------------------------------
   # Publicación en Docker Hub: SOLO si todos los gates pasan
