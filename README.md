@@ -8,6 +8,12 @@
 
 ---
 
+## 📝 Resumen Ejecutivo
+
+Este proyecto implementa un pipeline **DevSecOps** en GitHub Actions que construye la aplicación TypeScript en Docker, ejecuta las pruebas unitarias dentro del contenedor y publica la imagen en Docker Hub. Antes de publicar, el código y la imagen deben superar **gates de calidad y seguridad**: SonarCloud (Quality Gate), Snyk (dependencias y código), GitHub Advanced Security (CodeQL, Dependency Review y escaneo de secretos con Gitleaks) y Docker Scout (CVEs de la imagen). Si **cualquier gate falla, la imagen no se publica** y un Ruleset impide integrar el Pull Request a `main`. El funcionamiento se demostró con evidencias en dos fases: primero el **bloqueo** del pipeline ante código inseguro, secretos expuestos y vulnerabilidades intencionales (sección 7), y luego la **remediación** de cada hallazgo hasta obtener el pipeline aprobado y la imagen publicada (secciones 8 y 9).
+
+---
+
 ## 👥 Equipo de Trabajo y Distribución de Responsabilidades
 
 | Estudiante | Rol / Parte Asignada | Responsabilidades Principales |
@@ -65,9 +71,9 @@ flowchart TD
 ### 2.1. Dockerfile Multi-Etapa (`Dockerfile`)
 Se diseñó un `Dockerfile` optimizado siguiendo las mejores prácticas de la industria y consideraciones éticas de seguridad:
 
-1. **Etapa 1 (`builder`):** Basada en `node:18-alpine` para minimizar el tamaño de la imagen y reducir la superficie de ataque frente a vulnerabilidades. Instala todas las dependencias necesarias (`npm ci` o `npm install`) y compila el proyecto TypeScript generando los artefactos en `dist/`.
+1. **Etapa 1 (`builder`):** Basada en `node:22-alpine` para minimizar el tamaño de la imagen y reducir la superficie de ataque frente a vulnerabilidades. Instala todas las dependencias necesarias (`npm ci --ignore-scripts`) y compila el proyecto TypeScript generando los artefactos en `dist/`.
 2. **Etapa 2 (`test`):** Diseñada específicamente para la ejecución de pruebas unitarias dentro del entorno aislado del contenedor (`npm run test:unit`).
-3. **Etapa 3 (`production`):** Contiene únicamente las dependencias de producción (`npm ci --only=production`) y los archivos compilados en `dist/`. Además, incorpora la instrucción **`USER node`** para evitar la ejecución del contenedor como usuario `root` (principio ético de mínimo privilegio).
+3. **Etapa 3 (`production`):** Basada en `node:22-alpine`. Contiene únicamente las dependencias de producción (`npm ci --omit=dev --ignore-scripts`) y los archivos compilados en `dist/`. Además, incorpora la instrucción **`USER node`** para evitar la ejecución del contenedor como usuario `root` (principio ético de mínimo privilegio).
 
 ### 2.2. Archivo `.dockerignore`
 Se configuró para excluir archivos sensibles y temporales:
@@ -294,10 +300,34 @@ Tras la primera remediación, SonarCloud seguía exigiendo **Security Rating A e
 | 8 | Actions referenciadas por tag mutable (`@v4`, `@master`) | Todas las actions de los 5 workflows se fijaron a su **commit SHA completo**, con la versión en un comentario (por ejemplo, `actions/checkout@11d5960a… # v4.4.0`). Los SHA se obtuvieron con `git ls-remote`. SonarCloud se actualizó a `sonarqube-scan-action` **v6.0.0** (la v5 ya no tiene soporte) y Snyk de `@master` a la release **v1.0.0**. | Un tag puede moverse a otro commit en cualquier momento. Si el repositorio de una action es comprometido, un tag modificado ejecutaría código malicioso en el pipeline con acceso a los secrets (**ataque a la cadena de suministro**). Un SHA es inmutable. Dependabot (`github-actions`) sigue proponiendo las actualizaciones. |
 | 9 | API key enviada en la URL (`?api_key=…`) y respuesta externa registrada con `console.log` | `fetchData()` envía la key en el header **`x-api-key`**. Ya no se registran la respuesta ni el objeto de error; solo mensajes fijos (`'Consulta a la API completada.'`, `'Error al consultar la API.'`). Las pruebas verifican que la key no aparece en la URL y que la respuesta no se registra. | Las query strings quedan guardadas en logs de servidores, proxies e historial, lo que **filtra la credencial**. Registrar datos externos sin sanitizar permite inyección de logs y exposición de información sensible. |
 | 10 | Instalación de dependencias con scripts habilitados y fallback `\|\| npm install` | En el `Dockerfile` (etapas `builder` y `production`), el job `sonarcloud` y los workflows legado se usa **`npm ci --ignore-scripts`**, sin fallback. Se verificó localmente que `npm ci --ignore-scripts && npm run build && npm run test:coverage` funciona. | Los scripts `preinstall`/`postinstall` de cualquier dependencia (incluso transitiva) se ejecutan con los permisos del pipeline: es un vector conocido de malware en npm. El fallback `npm install` ignoraba el `package-lock.json` y podía instalar versiones no revisadas; `npm ci` instala exactamente lo bloqueado o falla. |
-| 11 | Docker Scout bloqueando por un CVE **sin arreglo disponible** (`musl` de Alpine) | En el paso `docker/scout-action` se agregó **`only-fixed: true`**. | Tras actualizar a `node:22-alpine` y aplicar `apk upgrade`, el único hallazgo restante es de `musl` y **no existe versión corregida**: el equipo no puede remediarlo. Con `only-fixed: true` el gate sigue bloqueando todo CVE critical/high **accionable** (con parche publicado), pero no detiene el pipeline por algo imposible de corregir. El CVE sigue visible en el reporte de Scout para monitorearlo. |
+| 11 | Docker Scout bloqueando por CVEs de paquetes de Alpine | En el paso `docker/scout-action` se agregó **`only-fixed: true`**. | Con `only-fixed: true` el gate bloquea todo CVE critical/high **accionable** (con versión corregida publicada), pero no detiene el pipeline por hallazgos que aún no tienen parche y que el equipo no puede remediar. Esos CVEs siguen visibles en el reporte de Scout para monitorearlos. |
+
+### 8.2. Tercera ronda: cierre de los gates
+
+| # | Problema detectado | Corrección aplicada | Por qué |
+| :---: | :--- | :--- | :--- |
+| 12 | `npm ci` fallaba en GitHub Actions y Docker (*"package.json and package-lock.json are not in sync"*) | Se regeneró el `package-lock.json` con **npm 10** (`npx -y npm@10 install --package-lock-only --ignore-scripts`) y se verificó con `npm@10 ci` en una carpeta limpia. | El lockfile se había generado con npm 11, que omite la *peer dependency* opcional `typescript` requerida por el `cosmiconfig` anidado de `semantic-release`. Node 22 (pipeline e imagen Docker) usa npm 10, que sí la exige. |
+| 13 | CVE de `musl` en la imagen `production` (**CVE-2026-107891**) | En la etapa `production` del `Dockerfile` se instala **`musl` 1.2.6-r6** (y `musl-utils`) desde el repositorio **Alpine edge** (`apk add --upgrade ... --repository=.../alpine/edge/main`). | La versión corregida solo está publicada en Alpine edge: **Alpine 3.24 todavía trae la 1.2.6-r3**, vulnerable. Como existe un arreglo, `only-fixed` lo considera accionable y el gate lo bloquea con razón; instalar el paquete parcheado elimina la vulnerabilidad sin esperar la siguiente versión de la imagen base. |
+| 14 | Job de Docker Scout fallaba al intentar comentar en el Pull Request | Se agregó **`write-comment: false`** al paso `docker/scout-action`. | Por defecto, Scout intenta publicar un comentario con el resumen en el PR, lo que requiere el permiso `pull-requests: write`. El pipeline trabaja con permisos mínimos (`contents: read`), por lo que el comentario fallaba y hacía fallar el gate por un motivo ajeno a la seguridad. El resultado del escaneo sigue disponible en el resumen del job. |
+| 15 | Falso negativo aleatorio en `differentTo.test.ts` | La prueba se corrigió igual que `equalsTo.test.ts`: el valor "distinto" se construye como `name + 'x'`, garantizando que nunca coincida con `name`. | La prueba generaba dos palabras aleatorias independientes con `WordMother`; a veces coincidían y la prueba fallaba sin que el código tuviera errores. Una prueba no determinista bloquea el pipeline sin motivo y resta confianza en los gates. |
 
 ---
 
 ## ✅ 9. Evidencia del Pipeline Aprobado
 
-*(capturas en docs/evidencias/10+)*
+Tras la remediación, el mismo pipeline que antes bloqueaba ahora aprueba todos los gates y publica la imagen.
+
+### 9.1. Pipeline completo en verde y publicación en Docker Hub
+Ejecución #19 del pipeline tras un `push` a `develop`: **todos los jobs terminan en verde** (Build y Pruebas, SonarCloud, Snyk, GHAS y Docker Scout) y, como todos los `needs` se cumplen, el job **`Publicar en Docker Hub` se ejecuta y publica la imagen**. `Dependency Review` aparece omitido porque solo corre en Pull Requests.
+
+![10 - Pipeline aprobado](docs/evidencias/10-pipeline-aprobado.jpg)
+
+### 9.2. SonarCloud: Quality Gate *Passed*
+El Quality Gate **"Sonar way"** de `develop` pasa a **Passed**: **0 issues nuevos**, **91.3% de cobertura** en código nuevo (mínimo exigido: 80%) y 0.0% de duplicación (máximo: 3%).
+
+![11 - SonarCloud Quality Gate Passed](docs/evidencias/11-sonarcloud-quality-gate-passed.jpg)
+
+### 9.3. Pull Request `develop` → `main` habilitado para merge
+El [Pull Request #1](https://github.com/grupo-4duoc/AUY1102-Pipelineparcial3/pull/1) hacia `main` muestra **"All checks have passed"** (15 exitosos, 2 omitidos) y sin conflictos: el Ruleset `proteger-main` ahora **permite el merge**, porque todos los checks requeridos están en verde.
+
+![12 - PR a main con checks OK](docs/evidencias/12-pr-main-checks-ok.jpg)
