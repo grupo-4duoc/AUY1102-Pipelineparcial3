@@ -13,6 +13,8 @@ export function getConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   };
 }
 
+export const API_URL = 'https://api.example.com/data';
+
 export async function fetchData(
   config: AppConfig = getConfig()
 ): Promise<unknown> {
@@ -22,15 +24,17 @@ export async function fetchData(
   }
 
   try {
-    const url = `https://api.example.com/data?api_key=${encodeURIComponent(
-      config.apiKey
-    )}`;
-    const response = await fetch(url);
+    // La API key viaja en un header y no en la URL: las query strings quedan
+    // registradas en logs de servidores, proxies e historial.
+    const response = await fetch(API_URL, {
+      headers: { 'x-api-key': config.apiKey },
+    });
     const data: unknown = await response.json();
-    console.log(data);
+    // No se registran la respuesta ni el error: son datos externos sin sanitizar.
+    console.info('Consulta a la API completada.');
     return data;
-  } catch (error) {
-    console.error('Error:', error);
+  } catch {
+    console.error('Error al consultar la API.');
     return undefined;
   }
 }
